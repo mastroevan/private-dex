@@ -16,18 +16,18 @@ import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 
 // ── Midnight SDK ─────────────────────────────────────────────────────────────
-import { deployContract }            from '@midnight-ntwrk/midnight-js/contracts';
-import { httpClientProofProvider }   from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
+import { deployContract } from '@midnight-ntwrk/midnight-js/contracts';
+import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-private-state-provider';
-import { NodeZkConfigProvider }      from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
+import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
 import { setNetworkId, getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
-import { toHex }                      from '@midnight-ntwrk/midnight-js-utils';
-import * as ledger                    from '@midnight-ntwrk/ledger-v8';
+import { toHex } from '@midnight-ntwrk/midnight-js-utils';
+import * as ledger from '@midnight-ntwrk/ledger-v8';
 
 // ── Wallet SDK ────────────────────────────────────────────────────────────────
 import { WalletFacade } from '@midnight-ntwrk/wallet-sdk-facade';
-import { DustWallet }   from '@midnight-ntwrk/wallet-sdk-dust-wallet';
+import { DustWallet } from '@midnight-ntwrk/wallet-sdk-dust-wallet';
 import { HDWallet, Roles, generateRandomSeed } from '@midnight-ntwrk/wallet-sdk-hd';
 
 // Pinned to 2.1.0 via "overrides" in package.json — the exact versions
@@ -53,15 +53,15 @@ import * as HelloWorldContract from
 setNetworkId('preprod');
 
 const CONFIG = {
-  indexer:     'https://indexer.preprod.midnight.network/api/v3/graphql',
-  indexerWS:   'wss://indexer.preprod.midnight.network/api/v3/graphql/ws',
-  node:        'https://rpc.preprod.midnight.network',
+  indexer: 'https://indexer.preprod.midnight.network/api/v3/graphql',
+  indexerWS: 'wss://indexer.preprod.midnight.network/api/v3/graphql/ws',
+  node: 'https://rpc.preprod.midnight.network',
   proofServer: 'http://127.0.0.1:6300',
-  faucetUrl:   'https://faucet.preprod.midnight.network/',
+  faucetUrl: 'https://faucet.preprod.midnight.network/',
 };
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
-const __dirname   = path.dirname(fileURLToPath(import.meta.url));
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const zkConfigPath = path.resolve(__dirname, '..', 'contracts', 'managed', 'hello-world');
 
 // ── Compiled contract ─────────────────────────────────────────────────────────
@@ -102,12 +102,12 @@ function deriveKeys(seedHex: string) {
 
 // ── Wallet factory ────────────────────────────────────────────────────────────
 async function createWallet(seedHex: string) {
-  const keys       = deriveKeys(seedHex);
-  const networkId  = getNetworkId();
+  const keys = deriveKeys(seedHex);
+  const networkId = getNetworkId();
 
-  const shieldedSecretKeys  = ledger.ZswapSecretKeys.fromSeed(keys[Roles.Zswap]);
-  const dustSecretKey       = ledger.DustSecretKey.fromSeed(keys[Roles.Dust]);
-  const unshieldedKeystore  = createKeystore(
+  const shieldedSecretKeys = ledger.ZswapSecretKeys.fromSeed(keys[Roles.Zswap]);
+  const dustSecretKey = ledger.DustSecretKey.fromSeed(keys[Roles.Dust]);
+  const unshieldedKeystore = createKeystore(
     keys[Roles.NightExternal] as Uint8Array,
     networkId,
   );
@@ -116,10 +116,10 @@ async function createWallet(seedHex: string) {
     networkId,
     indexerClientConnection: {
       indexerHttpUrl: CONFIG.indexer,
-      indexerWsUrl:   CONFIG.indexerWS,
+      indexerWsUrl: CONFIG.indexerWS,
     },
     provingServerUrl: new URL(CONFIG.proofServer),
-    relayURL:         new URL(CONFIG.node.replace(/^http/, 'ws')),
+    relayURL: new URL('wss://rpc.preprod.midnight.network/'),
     // InMemoryTransactionHistoryStorage from the facade's nested 2.1.0 copy
     // satisfies the TransactionHistoryStorage interface the facade requires.
     txHistoryStorage: new InMemoryTransactionHistoryStorage(),
@@ -131,14 +131,14 @@ async function createWallet(seedHex: string) {
 
   const wallet = await WalletFacade.init({
     configuration,
-    shielded:    c => ShieldedWallet(c).startWithSecretKeys(shieldedSecretKeys),
-    unshielded:  c => UnshieldedWallet(c).startWithPublicKey(
-                        PublicKey.fromKeyStore(unshieldedKeystore)
-                      ),
-    dust:        c => DustWallet(c).startWithSecretKey(
-                        dustSecretKey,
-                        ledger.LedgerParameters.initialParameters().dust,
-                      ),
+    shielded: c => ShieldedWallet(c).startWithSecretKeys(shieldedSecretKeys),
+    unshielded: c => UnshieldedWallet(c).startWithPublicKey(
+      PublicKey.fromKeyStore(unshieldedKeystore)
+    ),
+    dust: c => DustWallet(c).startWithSecretKey(
+      dustSecretKey,
+      ledger.LedgerParameters.initialParameters().dust,
+    ),
   });
 
   await wallet.start(shieldedSecretKeys, dustSecretKey);
@@ -147,12 +147,14 @@ async function createWallet(seedHex: string) {
 }
 
 // ── Provider factory ──────────────────────────────────────────────────────────
-async function createProviders(ctx: Awaited<ReturnType<typeof createWallet>>) {
-  const state = await ctx.wallet.waitForSyncedState();
+async function createProviders(
+  ctx: Awaited<ReturnType<typeof createWallet>>,
+  state: any
+) {
 
   const walletProvider = {
-    getCoinPublicKey:        () => state.shielded.coinPublicKey.toHexString(),
-    getEncryptionPublicKey:  () => state.shielded.encryptionPublicKey.toHexString(),
+    getCoinPublicKey: () => state.shielded.coinPublicKey.toHexString(),
+    getEncryptionPublicKey: () => state.shielded.encryptionPublicKey.toHexString(),
 
     async balanceTx(tx: any, ttl?: Date) {
       const recipe = await ctx.wallet.balanceUnboundTransaction(
@@ -171,17 +173,17 @@ async function createProviders(ctx: Awaited<ReturnType<typeof createWallet>>) {
   };
 
   const zkConfigProvider = new NodeZkConfigProvider(zkConfigPath);
-  const accountId        = ctx.unshieldedKeystore.getBech32Address().toString();
+  const accountId = ctx.unshieldedKeystore.getBech32Address().toString();
 
   return {
     privateStateProvider: levelPrivateStateProvider({
-      privateStateStoreName:     'hello-world-state',
+      privateStateStoreName: 'hello-world-state',
       accountId,
       privateStoragePasswordProvider: () => process.env.PRIVATE_STATE_PASSWORD || 'development',
     }),
     publicDataProvider: indexerPublicDataProvider(CONFIG.indexer, CONFIG.indexerWS),
     zkConfigProvider,
-    proofProvider:    httpClientProofProvider(CONFIG.proofServer, zkConfigProvider),
+    proofProvider: httpClientProofProvider(CONFIG.proofServer, zkConfigProvider),
     walletProvider,
     midnightProvider: walletProvider,
   };
@@ -209,8 +211,12 @@ async function main() {
   const ctx = await createWallet(seedHex);
 
   console.log('  Syncing with network (may take a few minutes)...');
+  setInterval(() => {
+    console.log('  ...still syncing');
+  }, 10000);
+  
   const syncedState = await ctx.wallet.waitForSyncedState();
-  const address     = ctx.unshieldedKeystore.getBech32Address();
+  const address = ctx.unshieldedKeystore.getBech32Address();
   console.log(`  ✓ Synced\n  Wallet: ${address}\n`);
 
   const nightBalance = syncedState.unshielded.balances[ledger.unshieldedToken().raw] ?? 0n;
@@ -231,7 +237,7 @@ async function main() {
 
   // ── Deploy ────────────────────────────────────────────────────────────────
   console.log('  Deploying contract...\n');
-  const providers = await createProviders(ctx);
+  const providers = await createProviders(ctx, syncedState);
 
   const deployed = await deployContract(providers as any, {
     compiledContract: compiledContract as any,
