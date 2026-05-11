@@ -1,3 +1,11 @@
+// ─────────────────────────────────────────────────────────────
+//  setup network id before any other imports, to ensure all modules use the correct network configuration
+// ─────────────────────────────────────────────────────────────
+import { setNetworkId } from "@midnight-ntwrk/midnight-js-network-id";
+setNetworkId("preprod");
+// ─────────────────────────────────────────────────────────────
+// Required imports (after network id is set)
+// ─────────────────────────────────────────────────────────────
 import { CompiledContract } from "@midnight-ntwrk/compact-js";
 import { WalletFacade } from "@midnight-ntwrk/wallet-sdk-facade";
 import { HDWallet, Roles } from "@midnight-ntwrk/wallet-sdk-hd";
