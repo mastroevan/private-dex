@@ -1,13 +1,22 @@
 // ─────────────────────────────────────────────────────────────
-// Network MUST be set first
+// MUST BE FIRST — network config before any SDK import usage
 // ─────────────────────────────────────────────────────────────
 import { setNetworkId } from "@midnight-ntwrk/midnight-js-network-id";
 setNetworkId("preprod");
 
 // ─────────────────────────────────────────────────────────────
-// Imports
+// Core imports
 // ─────────────────────────────────────────────────────────────
+import fs from "fs";
+import path from "path";
+import * as ledger from "@midnight-ntwrk/ledger-v8";
+
+import { deployContract } from "@midnight-ntwrk/midnight-js/contracts";
 import { CompiledContract } from "@midnight-ntwrk/compact-js";
+
+import * as HelloWorld from "../contracts/managed/hello-world/contract/index.js";
+
+// Wallet SDK
 import { WalletFacade } from "@midnight-ntwrk/wallet-sdk-facade";
 import { HDWallet, Roles } from "@midnight-ntwrk/wallet-sdk-hd";
 import { ShieldedWallet } from "@midnight-ntwrk/wallet-sdk-shielded";
@@ -18,35 +27,35 @@ import {
   InMemoryTransactionHistoryStorage,
 } from "@midnight-ntwrk/wallet-sdk-unshielded-wallet";
 import { DustWallet } from "@midnight-ntwrk/wallet-sdk-dust-wallet";
-import * as ledger from "@midnight-ntwrk/ledger-v8";
-import * as fs from "fs";
-import { deployContract } from "@midnight-ntwrk/midnight-js/contracts";
-import * as HelloWorld from "../contracts/managed/hello-world/contract/index.js";
+import { getNetworkId } from "@midnight-ntwrk/midnight-js-network-id";
 
 // ─────────────────────────────────────────────────────────────
 // CONFIG
 // ─────────────────────────────────────────────────────────────
-const INDEXER_HTTP =
-  "https://indexer.preprod.midnight.network/api/v3/graphql";
-const INDEXER_WS =
-  "wss://indexer.preprod.midnight.network/api/v3/graphql/ws";
+const MAX_MEMORY_MB = 3500;
 
-const PROOF_SERVER = "http://127.0.0.1:6300";
-const RELAY = "wss://rpc.preprod.midnight.network";
+// Memory monitor (safe debug only)
+setInterval(() => {
+  const mb = process.memoryUsage().heapUsed / 1024 / 1024;
+  console.log(`🧠 Memory: ${mb.toFixed(2)} MB`);
 
-const SYNC_TIMEOUT_MS = 60_000;
+  if (mb > MAX_MEMORY_MB) {
+    console.log("❌ Memory limit exceeded — exiting safely");
+    process.exit(1);
+  }
+}, 8000);
 
 // ─────────────────────────────────────────────────────────────
-// WALLET CREATION (PURE, NO SYNC HERE)
+// WALLET CREATION
 // ─────────────────────────────────────────────────────────────
-async function createWallet(seedHex: string) {
-  const hd = HDWallet.fromSeed(Buffer.from(seedHex, "hex"));
+async function createWallet(seed: string) {
+  const hdWallet = HDWallet.fromSeed(Buffer.from(seed, "hex"));
 
-  if (hd.type !== "seedOk") {
+  if (hdWallet.type !== "seedOk") {
     throw new Error("Invalid seed");
   }
 
-  const derivation = hd.hdWallet
+  const derivation = hdWallet.hdWallet
     .selectAccount(0)
     .selectRoles([Roles.Zswap, Roles.NightExternal, Roles.Dust])
     .deriveKeysAt(0);
@@ -56,11 +65,9 @@ async function createWallet(seedHex: string) {
   }
 
   const keys = derivation.keys;
-  const networkId = "preprod";
+  const networkId = getNetworkId();
 
-  const shieldedSecretKeys = ledger.ZswapSecretKeys.fromSeed(
-    keys[Roles.Zswap]
-  );
+  const shieldedSecretKeys = ledger.ZswapSecretKeys.fromSeed(keys[Roles.Zswap]);
   const dustSecretKey = ledger.DustSecretKey.fromSeed(keys[Roles.Dust]);
   const unshieldedKeystore = createKeystore(
     keys[Roles.NightExternal],
@@ -71,11 +78,13 @@ async function createWallet(seedHex: string) {
     configuration: {
       networkId,
       indexerClientConnection: {
-        indexerHttpUrl: INDEXER_HTTP,
-        indexerWsUrl: INDEXER_WS,
+        indexerHttpUrl:
+          "https://indexer.preprod.midnight.network/api/v3/graphql",
+        indexerWsUrl:
+          "wss://indexer.preprod.midnight.network/api/v3/graphql/ws",
       },
-      provingServerUrl: new URL(PROOF_SERVER),
-      relayURL: new URL(RELAY),
+      provingServerUrl: new URL("http://127.0.0.1:6300"),
+      relayURL: new URL("wss://rpc.preprod.midnight.network"),
       txHistoryStorage: new InMemoryTransactionHistoryStorage(),
       costParameters: {
         additionalFeeOverhead: 300_000_000_000_000n,
@@ -106,36 +115,45 @@ async function createWallet(seedHex: string) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// LIGHTWEIGHT SYNC (NO FULL STATE BLOCKING)
+// FULL SYNC (NO TIMEOUT — CRITICAL FIX)
 // ─────────────────────────────────────────────────────────────
-async function warmWallet(wallet: any) {
-  const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("SYNC_TIMEOUT")), SYNC_TIMEOUT_MS)
-  );
+async function syncWallet(ctx: any) {
+  console.log("⏳ Syncing wallet (this may take a few minutes)...");
 
-  try {
-    await Promise.race([
-      wallet.waitForSyncedState(),
-      timeout,
-    ]);
-  } catch {
-    console.log("⚠️ Sync timeout hit — continuing with partial state");
+  let lastLog = Date.now();
+
+  const ticker = setInterval(() => {
+    if (Date.now() - lastLog > 8000) {
+      console.log("⏳ still syncing...");
+      lastLog = Date.now();
+    }
+  }, 5000);
+
+  const syncedState = await ctx.wallet.waitForSyncedState();
+
+  clearInterval(ticker);
+
+  // HARD GUARD — prevents your Bech32 crash
+  if (!syncedState?.shielded?.coinPublicKey) {
+    throw new Error("Wallet sync incomplete: missing coinPublicKey");
   }
+
+  console.log("✅ Wallet fully synced");
+
+  return syncedState;
 }
 
 // ─────────────────────────────────────────────────────────────
-// PROVIDERS (LAZY SAFE)
+// PROVIDERS
 // ─────────────────────────────────────────────────────────────
-async function createProviders(ctx: any) {
-  const state = await ctx.wallet.getState?.().catch(() => undefined);
-
+function createProviders(ctx: any, state: any) {
   return {
     walletProvider: {
       getCoinPublicKey: () =>
-        state?.shielded?.coinPublicKey?.toHexString?.() ?? "",
+        state.shielded.coinPublicKey.toHexString(),
 
       getEncryptionPublicKey: () =>
-        state?.shielded?.encryptionPublicKey?.toHexString?.() ?? "",
+        state.shielded.encryptionPublicKey.toHexString(),
 
       async balanceTx(tx: any, ttl?: Date) {
         const recipe = await ctx.wallet.balanceUnboundTransaction(
@@ -149,9 +167,8 @@ async function createProviders(ctx: any) {
           }
         );
 
-        const signed = await ctx.wallet.signRecipe(
-          recipe,
-          (payload: any) => ctx.unshieldedKeystore.signData(payload)
+        const signed = await ctx.wallet.signRecipe(recipe, (payload: any) =>
+          ctx.unshieldedKeystore.signData(payload)
         );
 
         return ctx.wallet.finalizeRecipe(signed);
@@ -168,22 +185,29 @@ async function createProviders(ctx: any) {
 async function main() {
   console.log(`
 ╔══════════════════════════════════════════════════════════════╗
-║      Deploy private-dex (production-safe)                   ║
+║      Deploy private-dex (stable production version)         ║
 ╚══════════════════════════════════════════════════════════════╝
 `);
 
   const seedHex = fs.readFileSync(".midnight-seed", "utf-8").trim();
 
-  console.log("🔄 Creating wallet...");
+  // WALLET
   const ctx = await createWallet(seedHex);
 
-  console.log("⚡ Warming wallet (non-blocking sync)...");
-  await warmWallet(ctx.wallet);
+  // SYNC (FIXED)
+  const syncedState = await syncWallet(ctx);
 
   const address = ctx.unshieldedKeystore.getBech32Address();
   console.log(`\n✔ Wallet: ${address}`);
 
-  // ── CONTRACT ────────────────────────────────────────────────
+  const balance =
+    syncedState.unshielded.balances[ledger.unshieldedToken().raw] ?? 0n;
+
+  if (balance === 0n) {
+    console.log("⚠️ Balance is 0 — fund wallet before deploying");
+  }
+
+  // CONTRACT
   console.log("\n📦 Preparing contract...");
 
   const compiledContract = CompiledContract.make(
@@ -191,7 +215,7 @@ async function main() {
     HelloWorld.Contract
   );
 
-  const providers = await createProviders(ctx);
+  const providers = createProviders(ctx, syncedState);
 
   console.log("\n🚀 Deploying contract...");
 
@@ -203,8 +227,8 @@ async function main() {
   const contractAddress =
     deployed.deployTxData.public.contractAddress;
 
-  console.log("\n✅ Deployed!");
-  console.log("📍", contractAddress);
+  console.log("\n✅ Contract deployed!");
+  console.log(`📍 ${contractAddress}`);
 
   fs.writeFileSync(
     "deployment.json",
@@ -223,13 +247,14 @@ async function main() {
 
   try {
     await ctx.wallet.stop();
+    console.log("🧹 Wallet closed cleanly");
   } catch {}
 
-  console.log("\n🎉 Done. CLI ready.");
+  console.log("\n🎉 Done.");
 }
 
 // ─────────────────────────────────────────────────────────────
-// BOOT
+// RUN
 // ─────────────────────────────────────────────────────────────
 main().catch((err) => {
   console.error("\n❌ Fatal error:\n", err);
