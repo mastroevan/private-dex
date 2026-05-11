@@ -9,7 +9,6 @@
  *  types.  The "overrides" field in package.json forces both to 2.1.0 so every
  *  import site resolves the same build that the facade expects.
  */
-
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +43,84 @@ import {
 import { CompiledContract } from '@midnight-ntwrk/compact-js';
 import * as HelloWorldContract from
   '../contracts/managed/hello-world/contract/index.js';
+
+// ── Safety guards ─────────────────────────────────────────────
+
+const MAX_MEMORY_MB = 3500;
+
+setInterval(() => {
+  const mb = process.memoryUsage().heapUsed / 1024 / 1024;
+  if (mb > 200 || mb % 200 < 5) {
+    console.log(`🧠 Memory: ${mb.toFixed(2)} MB`);
+  }
+  console.log(`🧠 Memory: ${mb.toFixed(2)} MB`);
+
+  if (mb > MAX_MEMORY_MB) {
+    console.log("❌ Memory limit exceeded — exiting safely");
+    process.exit(1);
+  }
+}, 5000);
+
+async function safeRetry<T>(
+  label: string,
+  fn: () => Promise<T>,
+  maxAttempts = 5
+): Promise<T> {
+  let attempt = 0;
+
+  while (attempt < maxAttempts) {
+    try {
+      attempt++;
+      console.log(`🔄 ${label} (attempt ${attempt}/${maxAttempts})`);
+
+      const result = await fn();
+
+      console.log(`✅ ${label} completed`);
+      return result;
+    } catch (err) {
+      console.log(`⚠️ ${label} failed:`, err);
+
+      await new Promise(r => setTimeout(r, 2000 * attempt));
+    }
+  }
+
+  throw new Error(`❌ ${label} failed after ${maxAttempts} attempts`);
+}
+
+function startSyncHeartbeat() {
+  let lastUpdate = Date.now();
+
+  const interval = setInterval(() => {
+    const delta = Date.now() - lastUpdate;
+    console.log(`⏳ Sync alive (${Math.floor(delta / 1000)}s since update)`);
+  }, 5000);
+
+  return {
+    touch: () => (lastUpdate = Date.now()),
+    stop: () => clearInterval(interval),
+  };
+}
+
+async function safeSync<T>(syncFn: () => Promise<T>): Promise<T> {
+  let attempts = 0;
+
+  while (attempts < 5) {
+    try {
+      attempts++;
+      console.log(`🔄 Sync attempt ${attempts}`);
+
+      const result = await syncFn();
+
+      console.log("✅ Sync completed");
+      return result;
+    } catch (e) {
+      console.log("⚠️ Sync failed, retrying...", e);
+      await new Promise(r => setTimeout(r, 2000 * attempts));
+    }
+  }
+
+  throw new Error("❌ Sync failed after max retries");
+}
 
 // ── Network WebSocket fix ─────────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -189,6 +266,49 @@ async function createProviders(
   };
 }
 
+
+
+async function syncWithReset(seedHex: string): Promise<any> {
+  let attempts = 0;
+
+  while (attempts < 5) {
+    attempts++;
+
+    console.log(`🔄 Full wallet restart attempt ${attempts}`);
+
+    const ctx = await createWallet(seedHex);
+
+    const heartbeat = startSyncHeartbeat();
+
+    try {
+      const syncedState = await Promise.race([
+        ctx.wallet.waitForSyncedState(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("sync timeout")), 120000)
+        ),
+      ]);
+
+      heartbeat.stop();
+
+      console.log("✅ Sync successful");
+
+      return { ctx, syncedState };
+    } catch (e) {
+      heartbeat.stop();
+
+      console.log("⚠️ Sync failed, resetting wallet context...");
+
+      try {
+        await ctx.wallet.stop();
+      } catch {}
+
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  }
+
+  throw new Error("❌ Wallet sync failed after retries");
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
   console.log('\n╔══════════════════════════════════════════════════════════════╗');
@@ -207,15 +327,17 @@ async function main() {
   }
 
   // ── Wallet + sync ─────────────────────────────────────────────────────────
-  console.log('  Creating wallet...');
-  const ctx = await createWallet(seedHex);
+  console.log("  Syncing with network (safe mode)...");
 
-  console.log('  Syncing with network (may take a few minutes)...');
-  setInterval(() => {
-    console.log('  ...still syncing');
-  }, 10000);
-  
-  const syncedState = await ctx.wallet.waitForSyncedState();
+  const heartbeat = startSyncHeartbeat();
+
+  const { ctx: safeCtx, syncedState } = await syncWithReset(seedHex);
+  const ctx = safeCtx;
+
+  heartbeat.stop();
+
+  console.log("  ✓ Synced");
+
   const address = ctx.unshieldedKeystore.getBech32Address();
   console.log(`  ✓ Synced\n  Wallet: ${address}\n`);
 
